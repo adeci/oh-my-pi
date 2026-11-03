@@ -8,6 +8,7 @@ import {
 import { prompt } from "@oh-my-pi/pi-utils";
 import { IrcBus } from "../irc/bus";
 import waitDescription from "../prompts/tools/wait.md" with { type: "text" };
+import waitUnansweredSteer from "../prompts/tools/wait-unanswered-steer.md" with { type: "text" };
 import type { ToolSession } from ".";
 import type { AsyncJob, AsyncJobManager } from "../async/job-manager";
 import { buildJobResult, snapshotJobs, undeliveredJobs } from "../async/job-control";
@@ -106,14 +107,28 @@ export class WaitTool implements AgentTool<typeof waitSchema, CoordinationDetail
 	readonly loadMode = "essential";
 	readonly intent = "optional";
 
+	/** The steer the last held-back wait named; a wait for the same one blocks, so the guard cannot loop. */
+	#heldBackSteerAt: number | undefined;
+
 	constructor(private readonly session: ToolSession) {}
 
 	async execute(
-		_toolCallId: string,
+		toolCallId: string,
 		_params: typeof waitSchema.infer,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<CoordinationDetails>,
 	): Promise<AgentToolResult<CoordinationDetails>> {
+		// Blocking again would leave the user's mid-run message without a reply
+		// they can see. Returning first loses nothing: running jobs keep their
+		// ordinary async delivery, and queued messages stay queued.
+		const steerAt = this.session.getUnansweredSteerTime?.(toolCallId);
+		if (steerAt !== undefined && steerAt !== this.#heldBackSteerAt) {
+			this.#heldBackSteerAt = steerAt;
+			return {
+				content: [{ type: "text", text: prompt.render(waitUnansweredSteer) }],
+				details: { op: "wait", jobs: [] },
+			};
+		}
 		const registry = this.session.agentRegistry;
 		const senderId = this.session.getAgentId?.() ?? undefined;
 		const messaging = registry && senderId ? { registry, senderId } : undefined;

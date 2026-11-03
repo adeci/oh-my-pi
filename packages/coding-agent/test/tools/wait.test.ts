@@ -90,6 +90,25 @@ describe("wait", () => {
 		expect(delivered).toEqual(["finished afterward"]);
 	});
 
+	test("a wait after an unanswered user steer returns at once, once, leaving the job deliverable", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const { promise, resolve } = Promise.withResolvers<string>();
+		const id = manager.register("bash", "watcher", async () => promise, { ownerId: "Main" });
+		const tool = new WaitTool({ ...session(manager), getUnansweredSteerTime: () => 7 } as ToolSession);
+		// The job is still running, so only the guard can end this wait.
+		const heldBack = await tool.execute("after-steer", {});
+		expect(heldBack.details).toEqual({ op: "wait", jobs: [] });
+		expect(manager.isJobResultConsumed(id)).toBe(false);
+		// The model ignored the nudge: the next wait for the same steer blocks on the job.
+		const blocking = tool.execute("again", {});
+		resolve("replacement found");
+		expect((await blocking).details?.jobs?.[0]).toMatchObject({
+			id,
+			status: "completed",
+			resultText: "replacement found",
+		});
+	});
+
 	test("a message interrupt returns a non-error result and leaves the completion auto-deliverable", async () => {
 		const manager = new AsyncJobManager({ onJobComplete: () => {} });
 		const delivered: string[] = [];

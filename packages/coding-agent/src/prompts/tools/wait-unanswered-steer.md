@@ -1,0 +1,1 @@
+Not waiting: the user wrote to you mid-run and has seen no reply. Reasoning is not a reply. Answer them in text now. Background jobs keep running and still deliver on their own; call `wait` again after replying if you still need to block.

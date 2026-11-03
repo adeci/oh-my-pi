@@ -724,6 +724,38 @@ function isSteeringUserMessage(message: AgentMessage | undefined): message is St
 	);
 }
 
+/**
+ * The user's mid-run steer that no visible assistant text has answered yet, as
+ * of tool call `toolCallId`. Reasoning is not an answer: the user never sees it.
+ * While its tools execute, the calling message is the newest assistant message;
+ * any other `toolCallId` resolves nothing. A run opened by an ordinary prompt
+ * owes no reply here (the agent is doing what it asked), and an agent-attributed
+ * steer has no human waiting on it.
+ */
+export function findUnansweredSteer(messages: readonly AgentMessage[], toolCallId: string): AgentMessage | undefined {
+	let index = messages.findLastIndex(message => message.role === "assistant");
+	const current = messages[index];
+	if (
+		current?.role !== "assistant" ||
+		!current.content.some(block => block.type === "toolCall" && block.id === toolCallId)
+	)
+		return undefined;
+	for (; index >= 0; index--) {
+		const message = messages[index];
+		if (isSteeringUserMessage(message)) {
+			if (message.attribution !== "agent") return message;
+		} else if (message.role === "user") {
+			return undefined;
+		} else if (
+			message.role === "assistant" &&
+			message.content.some(block => block.type === "text" && block.text.trim())
+		) {
+			return undefined;
+		}
+	}
+	return undefined;
+}
+
 function userMessageWithoutSteering(message: UserMessage): UserMessage {
 	const { steering, ...rest } = message;
 	void steering;

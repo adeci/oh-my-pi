@@ -12,6 +12,7 @@ import {
 	replaceLlmImagesWithText,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
+	findUnansweredSteer,
 	stripImagesFromMessage,
 	wrapSteeringForModel,
 } from "../../src/session/messages";
@@ -549,5 +550,66 @@ describe("dedupeEphemeralReply", () => {
 		expect(dedupeEphemeralReply(`${"a".repeat(8)}😀${"b".repeat(40)}`, budget + 1)).toBe(
 			`${"a".repeat(8)}😀${suffix}`,
 		);
+	});
+});
+
+describe("findUnansweredSteer", () => {
+	function step(...content: AssistantMessage["content"]): AssistantMessage {
+		return { ...abortedAssistant(content), stopReason: "toolUse" };
+	}
+	function call(id: string, name: string): AssistantMessage["content"][number] {
+		return { type: "toolCall", id, name, arguments: {} };
+	}
+	function result(id: string, name: string): AgentMessage {
+		return { role: "toolResult", toolCallId: id, toolName: name, content: [], isError: false, timestamp: 1 };
+	}
+	function steer(content: string, attribution: "agent" | "user", timestamp: number): AgentMessage {
+		return { role: "user", content, steering: true, attribution, timestamp };
+	}
+	const prompt: AgentMessage = {
+		role: "user",
+		content: "start the watcher and wait",
+		attribution: "user",
+		timestamp: 1,
+	};
+	// A run blocked on its background watcher when the user writes in.
+	const blocked: AgentMessage[] = [
+		prompt,
+		step(call("b1", "bash")),
+		result("b1", "bash"),
+		step(call("w1", "wait")),
+		result("w1", "wait"),
+	];
+
+	it("names a steer the agent re-waits on with only reasoning, or after a look-up without text", () => {
+		const question = steer("what is asg vs aws?", "user", 7);
+		const silentRewait = [
+			...blocked,
+			question,
+			step({ type: "thinking", thinking: "I'll explain, then wait." }, call("w2", "wait")),
+		];
+		expect(findUnansweredSteer(silentRewait, "w2")).toBe(question);
+		const lookupThenWait = [
+			...blocked,
+			question,
+			step(call("r1", "read")),
+			result("r1", "read"),
+			step(call("w2", "wait")),
+		];
+		expect(findUnansweredSteer(lookupThenWait, "w2")).toBe(question);
+	});
+
+	it("owes nothing once text answered the steer, for a run opened by a prompt, or for an agent's steer", () => {
+		const answered = [
+			...blocked,
+			steer("hello?", "user", 7),
+			step({ type: "text", text: "Still waiting." }, call("r1", "read")),
+			result("r1", "read"),
+			step(call("w2", "wait")),
+		];
+		expect(findUnansweredSteer(answered, "w2")).toBeUndefined();
+		expect(findUnansweredSteer([prompt, step(call("w1", "wait"))], "w1")).toBeUndefined();
+		const agentSteer = [...blocked, steer("check bg_1", "agent", 7), step(call("w2", "wait"))];
+		expect(findUnansweredSteer(agentSteer, "w2")).toBeUndefined();
 	});
 });
